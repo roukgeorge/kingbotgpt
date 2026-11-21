@@ -10,7 +10,9 @@ from google.genai import types
 import toml
 
 cbconfig = toml.load("cbconfig.toml")
-AVATARS = cbconfig['AVATARS']
+
+USER_AVATAR = "👤"
+ASSISTANT_AVATAR = "🤖"
 
 HIDEMENU = """
 <style>
@@ -147,7 +149,7 @@ def generate_reply(user_query, client):
     return answer
 
 if __name__ == "__main__":
-    st.set_page_config(page_title="Βιβλιοθήκες ΔΙΠΑΕ - AI Chatbot", page_icon="🏛️", initial_sidebar_state="expanded")
+    st.set_page_config(page_title="Βιβλιοθήκες ΔΙΠΑΕ - AI Chatbot", page_icon="🤖", initial_sidebar_state="expanded")
     st.markdown(HIDEMENU, unsafe_allow_html=True)
     
     client = genai.Client(
@@ -157,8 +159,10 @@ if __name__ == "__main__":
     
     if "messages" not in st.session_state:
         st.session_state.messages = [{"role": "assistant", "content": WELCOME_MESSAGE}]
+    if "show_license" not in st.session_state:
+        st.session_state.show_license = False
     
-    # --- ΑΡΙΣΤΕΡΗ ΠΛΑΪΝΗ ΜΠΑΡΑ ---
+    # --- ΑΡΙΣΤΕΡΗ ΠΛΑΪΝΗ ΜΠΑΡΑ (Λογότυπο, Περιγραφή & 2 Κουμπιά) ---
     logo_path = find_logo()
     if logo_path:
         st.sidebar.image(logo_path, use_container_width=True)
@@ -168,23 +172,21 @@ if __name__ == "__main__":
     st.sidebar.markdown(cbconfig['side']['intro'])
     st.sidebar.markdown("---")
     
-    st.sidebar.link_button("🌐 Ιστοσελίδα Βιβλιοθηκών ΔΙΠΑΕ", "https://www.ihu.gr/vivliothiki-kentro-pliroforisis", use_container_width=True)
-    st.sidebar.link_button("📚 Ιδρυματικό Αποθετήριο ΕΥΡΗΚΑ", "https://eureka.lib.ihu.gr/", use_container_width=True)
+    st.sidebar.link_button("🌐 Βιβλιοθήκες ΔΙΠΑΕ", "https://www.ihu.gr/vivliothiki-kentro-pliroforisis", use_container_width=True)
     
-    if st.sidebar.button("🗑️ Καθαρισμός συνομιλίας", use_container_width=True):
-        st.session_state.messages = [{"role": "assistant", "content": WELCOME_MESSAGE}]
-        st.rerun()
+    if st.sidebar.button("⚖️ Αδειοδότηση", use_container_width=True):
+        st.session_state.show_license = not st.session_state.show_license
         
-    st.sidebar.markdown("---")
-    with st.sidebar.expander("⚖️ Άδεια Χρήσης & Όροι"):
-        st.caption(
-            "**Αδειοδότηση Λογισμικού:**\n"
+    if st.session_state.show_license:
+        st.sidebar.info(
+            "**Αδειοδότηση & Συμμόρφωση:**\n\n"
             "Προσαρμογή του ανοικτού λογισμικού *Kingbot (SJSU Library - MIT License)* "
-            "για τις Βιβλιοθήκες του ΔΙ.ΠΑ.Ε., σύμφωνα με τον Ν. 2121/1993 και τον Ν. 4727/2020.\n\n"
+            "για τις Βιβλιοθήκες του ΔΙ.ΠΑ.Ε., σύμφωνα με την ελληνική νομοθεσία "
+            "(Ν. 2121/1993 & Ν. 4727/2020) και τον Κανονισμό Λειτουργίας του Ιδρύματος.\n\n"
             "**Προστασία Δεδομένων (GDPR):**\n"
-            "Η εφαρμογή δεν συλλέγει ούτε αποθηκεύει προσωπικά δεδομένα χρηστών (Κανονισμός ΕΕ 2016/679).\n\n"
+            "Δεν συλλέγονται ούτε αποθηκεύονται προσωπικά δεδομένα χρηστών (Καν. ΕΕ 2016/679).\n\n"
             "**Σημείωση AI:**\n"
-            "Οι απαντήσεις παράγονται αυτόματα από επίσημες πηγές του ΔΙ.ΠΑ.Ε. Για δεσμευτικά ζητήματα ισχύει ο Εσωτερικός Κανονισμός."
+            "Οι απαντήσεις παράγονται αυτόματα από επίσημες πηγές του ΔΙ.ΠΑ.Ε."
         )
     
     # --- ΚΕΝΤΡΙΚΗ ΠΕΡΙΟΧΗ ---
@@ -201,9 +203,9 @@ if __name__ == "__main__":
         
     st.markdown("---")
     
-    # Εμφάνιση ιστορικού συνομιλίας
+    # Εμφάνιση συνομιλίας με ρομποτικό icon (🤖) για τον βοηθό
     for msg in st.session_state.messages:
-        avatar_icon = AVATARS["user"] if msg["role"] == "user" else AVATARS["assistant"]
+        avatar_icon = USER_AVATAR if msg["role"] == "user" else ASSISTANT_AVATAR
         st.chat_message(msg["role"], avatar=avatar_icon).write(msg["content"])
         
     user_query = st.chat_input(placeholder="Ρωτήστε για ωράρια, δανεισμό, συχνές ερωτήσεις, Σίνδο ή Σέρρες...")
@@ -220,10 +222,10 @@ if __name__ == "__main__":
         
     if new_query:
         st.session_state.messages.append({"role": "user", "content": new_query})
-        st.chat_message("user", avatar=AVATARS["user"]).write(new_query)
+        st.chat_message("user", avatar=USER_AVATAR).write(new_query)
         
         with st.spinner("Αναζήτηση στα δεδομένα των βιβλιοθηκών..."):
             reply = generate_reply(new_query, client)
             
         st.session_state.messages.append({"role": "assistant", "content": reply})
-        st.chat_message("assistant", avatar=AVATARS["assistant"]).write(reply)
+        st.chat_message("assistant", avatar=ASSISTANT_AVATAR).write(reply)
