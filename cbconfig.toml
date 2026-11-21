@@ -7,14 +7,14 @@ user = "user"
 assistant = "assistant"
 
 [main]
-title = "Kingbot GPT"
+title = "Ψηφιακός βοηθός Βιβλιοθηκών ΔΙΠΑΕ"
 logo = "![Kingbot](./app/static/kingbot_icon.png)"
 
 [side]
-title = "[![SJSU Library](./app/static/sjsu_library_logo.png)](https://library.sjsu.edu/)"
-intro = "KingbotGPT is an experimental python-based bot created by the university library's artificial intelligence (AI) team at San Jose State University. It is our newest model of the original After-Hours Kingbot Chatbot. Kingbot is intended to provide basic information about the library and library resources. Kingbot is not a research tool or a replacement for librarian and library staff expertise."
-policylink = "https://www.sjlibrary.org/policy/chatbot-policy"
-policylabel = "See Kingbot Policy"
+title = "## Βιβλιοθήκη ΔΙΠΑΕ"
+intro = "Ο ψηφιακός βοηθός της Βιβλιοθήκης του Διεθνούς Πανεπιστημίου της Ελλάδος (ΔΙΠΑΕ). Απαντά σε ερωτήσεις σχετικά με τις υπηρεσίες, τον δανεισμό και το ωράριο λειτουργίας."
+policylink = "https://www.ihu.gr"
+policylabel = "Ιστοσελίδα ΔΙΠΑΕ"
 
 [button1]
 label = "SJSU Library Hours"
