@@ -2,6 +2,8 @@ import os
 import glob
 import json
 import time
+import threading
+import unicodedata
 from datetime import datetime
 import requests
 import streamlit as st
@@ -30,20 +32,86 @@ WELCOME_MESSAGE = (
     "σχετικά με τα ωράρια λειτουργίας (Σίνδος, Σέρρες, Θέρμη), τον δανεισμό βιβλίων και τις υπηρεσίες."
 )
 
-def load_library_knowledge():
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r", encoding="utf-8") as f:
-            return f.read().strip()
-    return ""
+STOPWORDS = {
+    "και", "για", "απο", "στη", "στην", "στο", "στον", "στης", "στους", "στις",
+    "των", "του", "της", "τον", "την", "ενα", "μια", "ενας", "ειναι", "εχει",
+    "εχουν", "πως", "ποιο", "ποια", "ποιος", "ποιες", "ποια", "τι", "ωρα",
+    "μπορω", "θελω", "σχετικα", "με", "σε", "ως", "οτι", "αν", "θα", "να", "τα", "οι", "το"
+}
+
+def normalize_greek(text):
+    return "".join(
+        ch for ch in unicodedata.normalize("NFD", text.lower())
+        if unicodedata.category(ch) != "Mn"
+    )
+
+def extract_stems(text):
+    norm = normalize_greek(text)
+    cleaned = "".join(ch if ch.isalnum() else " " for ch in norm)
+    stems = set()
+    for word in cleaned.split():
+        if len(word) >= 3 and word not in STOPWORDS:
+            stems.add(word[:5] if len(word) >= 5 else word)
+    return stems
+
+@st.cache_resource(show_spinner=False)
+def load_and_chunk_knowledge():
+    if not os.path.exists(DATA_FILE):
+        return "", []
+    with open(DATA_FILE, "r", encoding="utf-8") as f:
+        full_text = f.read().strip()
+
+    chunks = []
+    current_source = "https://www.ihu.gr/vivliothiki-kentro-pliroforisis"
+    chunk_size = 1200
+
+    for line in full_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("=== ΠΗΓΗ:"):
+            current_source = line.replace("=== ΠΗΓΗ:", "").replace("===", "").strip()
+            continue
+        # Αν μια γραμμή είναι πολύ μεγάλη, τη σπάμε σε μικρότερα κομμάτια
+        for i in range(0, len(line), chunk_size):
+            piece = line[i:i + chunk_size]
+            chunks.append((f"[{current_source}]\n{piece}", extract_stems(piece)))
+
+    return full_text, chunks
+
+def get_relevant_context(query, max_chunks=10):
+    full_text, chunks = load_and_chunk_knowledge()
+    if len(full_text) <= 15000 or not chunks:
+        return full_text
+
+    query_stems = extract_stems(query)
+    if not query_stems:
+        return "\n\n".join(c[0] for c in chunks[:max_chunks])
+
+    scored = []
+    for idx, (chunk_text, chunk_stems) in enumerate(chunks):
+        score = sum(1 for s in query_stems if any(cs.startswith(s) or s.startswith(cs) for cs in chunk_stems))
+        scored.append((score, idx, chunk_text))
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    top_chunks = sorted(scored[:max_chunks], key=lambda x: x[1])
+    return "\n\n---\n\n".join(c[2] for c in top_chunks)
 
 @st.cache_resource(ttl="1d", show_spinner=False)
 def get_available_models(_client):
-    preferred = ["gemini-3.8-flash", "gemini-2.5-flash"]
+    preferred = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"]
     try:
+        available = []
         for m in _client.models.list():
             name = m.name.replace("models/", "")
-            if "flash" in name and "image" not in name and "audio" not in name and name not in preferred:
-                preferred.append(name)
+            if "flash" in name and "image" not in name and "audio" not in name and "tts" not in name:
+                available.append(name)
+        ordered = [m for m in preferred if m in available]
+        for m in available:
+            if m not in ordered:
+                ordered.append(m)
+        if ordered:
+            return ordered
     except Exception:
         pass
     return preferred
@@ -59,79 +127,94 @@ def find_logo():
                     return f
     return None
 
-def log_anonymous_stat(source, category, question, answered):
-    webhook_url = st.secrets.get("STATS_WEBHOOK_URL", "").strip()
-    if not webhook_url:
-        return
+def _send_stat_worker(webhook_url, payload):
     try:
-        payload = {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "source": source,
-            "category": category,
-            "question": question,
-            "answered": "Ναι" if answered else "Όχι"
-        }
         requests.post(webhook_url, json=payload, timeout=10)
     except Exception:
         pass
 
-def get_system_prompt():
-    library_content = load_library_knowledge()
+def log_anonymous_stat_async(source, category, question, answered):
+    webhook_url = st.secrets.get("STATS_WEBHOOK_URL", "").strip()
+    if not webhook_url:
+        return
+    payload = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source": source,
+        "category": category,
+        "question": question,
+        "answered": "Ναι" if answered else "Όχι"
+    }
+    threading.Thread(target=_send_stat_worker, args=(webhook_url, payload), daemon=True).start()
+
+def build_system_prompt(relevant_content):
     return f"""
 Είσαι ο επίσημος ψηφιακός βοηθός των Βιβλιοθηκών και Κέντρων Πληροφόρησης του Διεθνούς Πανεπιστημίου της Ελλάδος (ΔΙΠΑΕ).
 Απαντάς πάντα στα ελληνικά με ευγένεια, σαφήνεια και απόλυτη ακρίβεια.
 
 ΑΥΣΤΗΡΟΙ ΚΑΝΟΝΕΣ:
 1. Οι Βιβλιοθήκες του ΔΙΠΑΕ λειτουργούν αποκλειστικά σε Σίνδο, Σέρρες και Θέρμη. Δεν λειτουργούν σε άλλες πόλεις.
-2. Βασίσου ΑΠΟΚΛΕΙΣΤΙΚΑ στα παρακάτω επίσημα κείμενα των Βιβλιοθηκών του ΔΙΠΑΕ (Ωράρια, Συχνές Ερωτήσεις, Κανονισμοί, Υπηρεσίες). Μην επινοείς κανόνες, ώρες ή αριθμούς.
-3. Όταν απαντάς, ανέφερε στο τέλος τη σχετική επίσημη σελίδα (URL) εφόσον αναφέρεται στα κείμενα, αλλιώς το https://www.ihu.gr/vivliothiki-kentro-pliroforisis.
-4. Αν μια πληροφορία δεν υπάρχει καθόλου στα παρακάτω κείμενα, δήλωσε ξεκάθαρα ότι δεν αναφέρεται αναλυτικά στις διαθέσιμες πληροφορίες και πρότεινε στον χρήστη να επισκεφθεί την επίσημη ιστοσελίδα (https://www.ihu.gr/vivliothiki-kentro-pliroforisis) ή να επικοινωνήσει απευθείας με το προσωπικό της βιβλιοθήκης (αναφέροντας και τα σχετικά τηλέφωνα ή email, αν υπάρχουν στα παρακάτω κείμενα).
+2. Βασίσου ΑΠΟΚΛΕΙΣΤΙΚΑ στα παρακάτω επίσημα αποσπάσματα των Βιβλιοθηκών του ΔΙΠΑΕ. Μην επινοείς κανόνες, ώρες ή αριθμούς.
+3. Όταν απαντάς, ανέφερε στο τέλος τη σχετική επίσημη σελίδα (URL) εφόσον αναφέρεται στα αποσπάσματα, αλλιώς το https://www.ihu.gr/vivliothiki-kentro-pliroforisis.
+4. Αν μια πληροφορία δεν υπάρχει καθόλου στα παρακάτω αποσπάσματα, δήλωσε ξεκάθαρα ότι δεν αναφέρεται αναλυτικά στις διαθέσιμες πληροφορίες και πρότεινε στον χρήστη να επισκεφθεί την επίσημη ιστοσελίδα (https://www.ihu.gr/vivliothiki-kentro-pliroforisis) ή να επικοινωνήσει απευθείας με το προσωπικό της βιβλιοθήκης (αναφέροντας και τα σχετικά τηλέφωνα ή email, αν υπάρχουν).
 
 ΜΟΡΦΗ ΕΞΟΔΟΥ (ΑΥΣΤΗΡΑ JSON):
 Επίστρεψε ΑΠΟΚΛΕΙΣΤΙΚΑ ένα έγκυρο αντικείμενο JSON με τα εξής 4 πεδία:
 - "answer": Η αναλυτική απάντησή σου στα ελληνικά (με Markdown μορφοποίηση).
 - "category": Μία από τις εξής κατηγορίες: "Ωράριο Λειτουργίας", "Δανεισμός & Κανόνες", "Παράρτημα Σίνδου", "Παράρτημα Σερρών", "Παράρτημα Θέρμης", "Ηλεκτρονικές Πηγές & Βάσεις", "Επικοινωνία & Προσωπικό", "Άλλο".
 - "sanitized_question": Η ερώτηση του χρήστη όπως ακριβώς γράφτηκε, ΑΛΛΑ αν περιέχει ονοματεπώνυμο, Αριθμό Μητρώου, email ή τηλέφωνο, αντικατάστησέ τα με "[ΑΝΩΝΥΜΟ]" για συμμόρφωση με τον GDPR.
-- "answered": true αν η απάντηση βρέθηκε στα παρακάτω κείμενα, ή false αν η πληροφορία δεν υπήρχε και παρέπεμψες στο προσωπικό.
+- "answered": true αν η απάντηση βρέθηκε στα παρακάτω αποσπάσματα, ή false αν η πληροφορία δεν υπήρχε και παρέπεμψες στο προσωπικό.
 
-ΕΠΙΣΗΜΟ ΠΕΡΙΕΧΟΜΕΝΟ ΒΙΒΛΙΟΘΗΚΩΝ ΔΙΠΑΕ:
-{library_content}
+ΣΧΕΤΙΚΑ ΑΠΟΣΠΑΣΜΑΤΑ ΒΙΒΛΙΟΘΗΚΩΝ ΔΙΠΑΕ:
+{relevant_content}
 """
 
-def generate_reply(user_query, source_label, client):
-    models_to_try = get_available_models(client)
-    full_instructions = get_system_prompt()
-    answer = None
-    last_error = ""
-    for model_name in models_to_try:
-        try:
-            response = client.models.generate_content(
-                model=model_name,
-                contents=user_query,
-                config=types.GenerateContentConfig(
-                    system_instruction=full_instructions,
-                    temperature=0.0,
-                    response_mime_type="application/json",
-                )
-            )
-            if response and response.text:
-                data = json.loads(response.text)
-                answer = data.get("answer", "")
-                log_anonymous_stat(
-                    source_label,
-                    data.get("category", "Άλλο"),
-                    data.get("sanitized_question", user_query),
-                    bool(data.get("answered", True))
-                )
-                break
-        except Exception as e:
-            last_error = str(e)
-            if "503" in last_error or "UNAVAILABLE" in last_error:
-                time.sleep(2)
-            continue
+@st.cache_data(ttl="1d", show_spinner=False)
+def cached_ai_query(normalized_key, user_query, _client):
+    models_to_try = get_available_models(_client)
+    relevant_content = get_relevant_context(user_query)
+    full_instructions = build_system_prompt(relevant_content)
 
-    if not answer:
-        answer = f"Προέκυψε προσωρινό σφάλμα επικοινωνίας με το AI ({last_error}). Παρακαλώ ξαναστείλτε την ερώτηση ή επικοινωνήστε με το προσωπικό της βιβλιοθήκης."
+    for model_name in models_to_try[:3]:
+        for attempt in range(2):
+            try:
+                response = _client.models.generate_content(
+                    model=model_name,
+                    contents=user_query,
+                    config=types.GenerateContentConfig(
+                        system_instruction=full_instructions,
+                        temperature=0.0,
+                        response_mime_type="application/json",
+                    )
+                )
+                if response and response.text:
+                    data = json.loads(response.text)
+                    return (
+                        True,
+                        data.get("answer", ""),
+                        data.get("category", "Άλλο"),
+                        data.get("sanitized_question", user_query),
+                        bool(data.get("answered", True))
+                    )
+            except Exception as e:
+                err_str = str(e)
+                if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
+                    time.sleep(1.0)
+                    continue
+                break
+
+    fallback = (
+        "Η υπηρεσία τεχνητής νοημοσύνης δέχεται αυξημένο φόρτο αυτή τη στιγμή. "
+        "Παρακαλούμε πατήστε ξανά το κουμπί ή ξαναστείλτε την ερώτησή σας σε λίγα δευτερόλεπτα, "
+        "ή επισκεφθείτε την επίσημη σελίδα: https://www.ihu.gr/vivliothiki-kentro-pliroforisis"
+    )
+    return False, fallback, "Άλλο", user_query, False
+
+def generate_reply(user_query, source_label, client):
+    norm_key = normalize_greek(user_query).strip()
+    ok, answer, category, sanitized_q, answered = cached_ai_query(norm_key, user_query, client)
+    if not ok:
+        cached_ai_query.clear()
+    log_anonymous_stat_async(source_label, category, sanitized_q, answered)
     return answer
 
 if __name__ == "__main__":
@@ -140,7 +223,7 @@ if __name__ == "__main__":
 
     client = genai.Client(
         api_key=st.secrets["GEMINI_API_KEY"],
-        http_options=types.HttpOptions(timeout=15000)
+        http_options=types.HttpOptions(timeout=20000)
     )
 
     if "current_qa" not in st.session_state:
@@ -164,7 +247,8 @@ if __name__ == "__main__":
         st.session_state.show_license = not st.session_state.show_license
 
     if st.session_state.show_license:
-        kb_size = f"{len(load_library_knowledge()):,}".replace(",", ".")
+        full_kb, _ = load_and_chunk_knowledge()
+        kb_size = f"{len(full_kb):,}".replace(",", ".")
         st.sidebar.info(
             "**Αδειοδότηση & Συμμόρφωση:**\n\n"
             "Προσαρμογή του ανοικτού λογισμικού *Kingbot (SJSU Library - MIT License)* "
