@@ -35,7 +35,7 @@ BASE_URLS = [
     "https://www.ihu.gr/vivliothiki-kentro-pliroforisis"
 ]
 
-@st.cache_resource(ttl="1d", show_spinner="Φόρτωση και ευρετηρίαση όλων των υπομενού της Βιβλιοθήκης ΔΙΠΑΕ...")
+@st.cache_resource(ttl="1d", show_spinner="Φόρτωση και ευρετηρίαση όλων των υπομενού των Βιβλιοθηκών ΔΙΠΑΕ...")
 def fetch_all_library_pages():
     headers = {"User-Agent": "Mozilla/5.0"}
     visited = set()
@@ -74,7 +74,6 @@ def fetch_all_library_pages():
 
 @st.cache_resource(ttl="1d", show_spinner=False)
 def get_available_models(_client):
-    # Ξεκινάμε με τα γνωστά ενεργά μοντέλα και προσθέτουμε αυτόματα όποιο άλλο flash είναι διαθέσιμο στον λογαριασμό
     preferred = ["gemini-3.8-flash", "gemini-2.5-flash"]
     try:
         for m in _client.models.list():
@@ -99,14 +98,14 @@ def find_logo():
 def get_system_prompt():
     live_content = fetch_all_library_pages()
     return f"""
-Είσαι ο επίσημος ψηφιακός βοηθός της Βιβλιοθήκης και Κέντρου Πληροφόρησης του Διεθνούς Πανεπιστημίου της Ελλάδος (ΔΙΠΑΕ).
+Είσαι ο επίσημος ψηφιακός βοηθός των Βιβλιοθηκών και Κέντρων Πληροφόρησης του Διεθνούς Πανεπιστημίου της Ελλάδος (ΔΙΠΑΕ).
 Απαντάς πάντα στα ελληνικά με ευγένεια, σαφήνεια και απόλυτη ακρίβεια.
 
 ΑΥΣΤΗΡΟΙ ΚΑΝΟΝΕΣ:
-1. Η Βιβλιοθήκη του ΔΙΠΑΕ λειτουργεί αποκλειστικά σε Σίνδο, Σέρρες και Θέρμη. Δεν λειτουργεί σε άλλες πόλεις.
-2. Βασίσου ΑΠΟΚΛΕΙΣΤΙΚΑ στα παρακάτω επίσημα κείμενα που αντλήθηκαν από τις ιστοσελίδες και τα υπομενού (Συχνές Ερωτήσεις, Κανονισμοί, Υπηρεσίες) της Βιβλιοθήκης του ΔΙΠΑΕ. Μην επινοείς κανόνες ή αριθμούς.
+1. Οι Βιβλιοθήκες του ΔΙΠΑΕ λειτουργούν αποκλειστικά σε Σίνδο, Σέρρες και Θέρμη. Δεν λειτουργούν σε άλλες πόλεις.
+2. Βασίσου ΑΠΟΚΛΕΙΣΤΙΚΑ στα παρακάτω επίσημα κείμενα που αντλήθηκαν από τις ιστοσελίδες και τα υπομενού (Συχνές Ερωτήσεις, Κανονισμοί, Υπηρεσίες) των Βιβλιοθηκών του ΔΙΠΑΕ. Μην επινοείς κανόνες ή αριθμούς.
 3. Όταν απαντάς, ανέφερε στο τέλος τη σχετική επίσημη σελίδα (URL) από τις πηγές παρακάτω ώστε ο χρήστης να μπορεί να τη δει αναλυτικά.
-4. Αν μια πληροφορία δεν υπάρχει καθόλου στα παρακάτω κείμενα, δήλωσε ξεκάθαρα ότι δεν αναφέρεται στις σελίδες της βιβλιοθήκης και παράπεμψε στο https://www.ihu.gr/vivliothiki-kentro-pliroforisis.
+4. Αν μια πληροφορία δεν υπάρχει καθόλου στα παρακάτω κείμενα, δήλωσε ξεκάθαρα ότι δεν αναφέρεται στις σελίδες των βιβλιοθηκών και παράπεμψε στο https://www.ihu.gr/vivliothiki-kentro-pliroforisis.
 
 ΕΠΙΣΗΜΟ ΠΕΡΙΕΧΟΜΕΝΟ ΙΣΤΟΣΕΛΙΔΩΝ & ΥΠΟΜΕΝΟΥ ΔΙΠΑΕ:
 {live_content}
@@ -116,7 +115,7 @@ def process_query(user_query, client):
     models_to_try = get_available_models(client)
     full_instructions = get_system_prompt()
     
-    with st.spinner(text="Αναζήτηση στα δεδομένα της βιβλιοθήκης..."):
+    with st.spinner(text="Αναζήτηση στα δεδομένα των βιβλιοθηκών..."):
         answer = None
         last_error = ""
         for model_name in models_to_try:
@@ -147,7 +146,7 @@ def process_query(user_query, client):
         }
 
 if __name__ == "__main__":
-    st.set_page_config(page_title="Βιβλιοθήκη ΔΙΠΑΕ - AI Chatbot", page_icon="🤖", initial_sidebar_state="expanded")
+    st.set_page_config(page_title="Βιβλιοθήκες ΔΙΠΑΕ - AI Chatbot", page_icon="🤖", initial_sidebar_state="expanded")
     st.markdown(HIDEMENU, unsafe_allow_html=True)
     
     client = genai.Client(
@@ -164,14 +163,14 @@ if __name__ == "__main__":
     st.sidebar.markdown(cbconfig['side']['title'])
     st.sidebar.markdown(cbconfig['side']['intro'])
     st.sidebar.markdown("\n\n")
-    st.sidebar.link_button("Βιβλιοθήκη ΔΙΠΑΕ", "https://www.ihu.gr/vivliothiki-kentro-pliroforisis")
+    st.sidebar.link_button("Βιβλιοθήκες ΔΙΠΑΕ", "https://www.ihu.gr/vivliothiki-kentro-pliroforisis")
     
     # Κεντρικός τίτλος
     col1, col2, col3 = st.columns([0.25, 0.1, 0.65], vertical_alignment="bottom")
     with col2:
         st.markdown(cbconfig['main']['logo'])
     with col3:
-        st.title("Βιβλιοθήκη ΔΙΠΑΕ")
+        st.title("Βιβλιοθήκες ΔΙΠΑΕ")
     st.markdown("\n\n")
     
     # Κουμπιά γρήγορων ερωτήσεων
