@@ -5,6 +5,7 @@ import time
 import unicodedata
 from datetime import datetime
 from urllib.parse import urljoin
+import urllib3
 import requests
 from bs4 import BeautifulSoup
 import streamlit as st
@@ -12,6 +13,7 @@ from google import genai
 from google.genai import types
 import toml
 
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 cbconfig = toml.load("cbconfig.toml")
 
 USER_AVATAR = "👤"
@@ -19,18 +21,10 @@ ASSISTANT_AVATAR = "🤖"
 
 HIDEMENU = """
 <style>
-.stApp [data-testid="stHeader"] {
-    display:none;
-}
-p img{
-    margin-bottom: 0.6rem;
-}
-[data-testid="stSidebarCollapseButton"] {
-    display:none;
-}
-[data-testid="baseButton-headerNoPadding"] {
-    display:none;
-}
+.stApp [data-testid="stHeader"] {display:none;}
+p img {margin-bottom: 0.6rem;}
+[data-testid="stSidebarCollapseButton"] {display:none;}
+[data-testid="baseButton-headerNoPadding"] {display:none;}
 </style>
 """
 
@@ -40,7 +34,14 @@ BASE_URLS = [
     "https://www.ihu.gr/vivliothiki-kentro-pliroforisis"
 ]
 
-EXCLUDED_URL_PARTS = [
+MENU_KEYWORDS = [
+    "vivliothik", "βιβλιοθ", "serr", "σερρ", "sind", "σινδ", "therm", "θερμ",
+    "orari", "ωραρ", "daneism", "δανεισμ", "erotis", "ερωτησ", "faq",
+    "kanonism", "κανονισμ", "prosopik", "προσωπικ", "epikoinon", "επικοινων",
+    "ypires", "υπηρεσ", "diadaneism", "διαδανεισμ", "syllog", "συλλογ"
+]
+
+EXCLUDED_PARTS = [
     "/en/", "/scholes", "/tmimata", "/dioikisi", "/prokiryxeis",
     "/diagonismoi", "/wp-login", "/wp-admin", "/feed"
 ]
@@ -58,64 +59,63 @@ def normalize_greek(text):
     )
 
 @st.cache_resource(ttl="1d", show_spinner="Φόρτωση και ευρετηρίαση όλων των υπομενού των Βιβλιοθηκών ΔΙΠΑΕ...")
-def fetch_all_library_pages_v3():
+def fetch_all_library_pages_v5():
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
         "Accept-Language": "el-GR,el;q=0.9,en;q=0.8",
     }
     visited = set()
     urls_to_crawl = list(BASE_URLS)
-    
-    # Εντοπισμός όλων των συνδέσμων από τα αριστερά μενού και το περιεχόμενο των σελίδων της βιβλιοθήκης
+
+    # 1. Συλλογή όλων των συνδέσμων από τα αριστερά υπομενού
     for base_url in BASE_URLS:
         try:
-            res = requests.get(base_url, headers=headers, timeout=8)
+            res = requests.get(base_url, headers=headers, timeout=10, verify=False)
             if res.status_code == 200:
                 soup = BeautifulSoup(res.text, "html.parser")
                 for tag in soup(["header", "footer", "script", "style"]):
                     tag.extract()
-                
-                # Συλλογή συνδέσμων από το αριστερό μενού (aside/menu/widget) και το κύριο περιεχόμενο
-                containers = soup.find_all(["aside", "main", "article"]) or [soup]
-                for container in containers:
-                    for a_tag in container.find_all("a", href=True):
-                        href = a_tag["href"].strip()
-                        if href.startswith(("mailto:", "tel:", "javascript:", "#")):
-                            continue
-                        full_url = urljoin(base_url, href).split("#")[0].rstrip("/")
-                        if "ihu.gr" not in full_url:
-                            continue
-                        if full_url.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".zip", ".mp4", ".pdf")):
-                            continue
-                        if any(ex in full_url.lower() for ex in EXCLUDED_URL_PARTS):
-                            continue
+                for a_tag in soup.find_all("a", href=True):
+                    href = a_tag["href"].strip()
+                    if href.startswith(("mailto:", "tel:", "javascript:", "#")):
+                        continue
+                    full_url = urljoin(base_url, href).split("#")[0].rstrip("/")
+                    if "ihu.gr" not in full_url:
+                        continue
+                    if full_url.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".zip", ".mp4", ".pdf")):
+                        continue
+                    if any(ex in full_url.lower() for ex in EXCLUDED_PARTS):
+                        continue
+                    norm_url = normalize_greek(full_url)
+                    norm_text = normalize_greek(a_tag.get_text(" ", strip=True))
+                    if "vivliothiki-kentro-pliroforisis" in norm_url or any(kw in norm_url or kw in norm_text for kw in MENU_KEYWORDS):
                         if full_url not in urls_to_crawl:
                             urls_to_crawl.append(full_url)
         except Exception:
             continue
 
+    # 2. Ανάκτηση καθαρού κειμένου από έως 45 υποσελίδες
     extracted_text = ""
-    crawled_count = 0
-    for url in urls_to_crawl[:35]:
+    crawled_urls = []
+    for url in urls_to_crawl[:45]:
         if url in visited:
             continue
         visited.add(url)
         try:
-            res = requests.get(url, headers=headers, timeout=8)
+            res = requests.get(url, headers=headers, timeout=10, verify=False)
             if res.status_code == 200:
                 soup = BeautifulSoup(res.text, "html.parser")
-                for tag in soup(["script", "style", "header", "footer"]):
+                for tag in soup(["script", "style", "header", "footer", "nav"]):
                     tag.extract()
-                body = soup.body or soup
-                text = " ".join(body.stripped_strings)
+                content_area = soup.find("main") or soup.find("article") or soup.body or soup
+                text = " ".join(content_area.stripped_strings)
                 if text:
                     extracted_text += f"\n\n=== ΠΗΓΗ: {url} ===\n{text}"
-                    crawled_count += 1
+                    crawled_urls.append(url)
         except Exception:
             continue
-            
-    return extracted_text, crawled_count
+
+    return extracted_text, crawled_urls
 
 @st.cache_resource(ttl="1d", show_spinner=False)
 def get_available_models(_client):
@@ -157,7 +157,7 @@ def log_anonymous_stat(source, category, question, answered):
         pass
 
 def get_system_prompt():
-    live_content, _ = fetch_all_library_pages_v3()
+    live_content, _ = fetch_all_library_pages_v5()
     return f"""
 Είσαι ο επίσημος ψηφιακός βοηθός των Βιβλιοθηκών και Κέντρων Πληροφόρησης του Διεθνούς Πανεπιστημίου της Ελλάδος (ΔΙΠΑΕ).
 Απαντάς πάντα στα ελληνικά με ευγένεια, σαφήνεια και απόλυτη ακρίβεια.
@@ -182,7 +182,6 @@ def get_system_prompt():
 def generate_reply(user_query, source_label, client):
     models_to_try = get_available_models(client)
     full_instructions = get_system_prompt()
-    
     answer = None
     last_error = ""
     for model_name in models_to_try:
@@ -199,18 +198,19 @@ def generate_reply(user_query, source_label, client):
             if response and response.text:
                 data = json.loads(response.text)
                 answer = data.get("answer", "")
-                category = data.get("category", "Άλλο")
-                sanitized_q = data.get("sanitized_question", user_query)
-                answered = bool(data.get("answered", True))
-                
-                log_anonymous_stat(source_label, category, sanitized_q, answered)
+                log_anonymous_stat(
+                    source_label,
+                    data.get("category", "Άλλο"),
+                    data.get("sanitized_question", user_query),
+                    bool(data.get("answered", True))
+                )
                 break
         except Exception as e:
             last_error = str(e)
             if "503" in last_error or "UNAVAILABLE" in last_error:
                 time.sleep(2)
             continue
-    
+
     if not answer:
         answer = f"Προέκυψε προσωρινό σφάλμα επικοινωνίας με το AI ({last_error}). Παρακαλώ ξαναστείλτε την ερώτηση ή επικοινωνήστε με το προσωπικό της βιβλιοθήκης."
     return answer
@@ -218,34 +218,34 @@ def generate_reply(user_query, source_label, client):
 if __name__ == "__main__":
     st.set_page_config(page_title="Βιβλιοθήκες ΔΙΠΑΕ - AI Chatbot", page_icon="🤖", initial_sidebar_state="expanded")
     st.markdown(HIDEMENU, unsafe_allow_html=True)
-    
+
     client = genai.Client(
         api_key=st.secrets["GEMINI_API_KEY"],
         http_options=types.HttpOptions(timeout=15000)
     )
-    
+
     if "current_qa" not in st.session_state:
         st.session_state.current_qa = None
     if "show_license" not in st.session_state:
         st.session_state.show_license = False
-    
+
     # --- ΑΡΙΣΤΕΡΗ ΠΛΑΪΝΗ ΜΠΑΡΑ ---
     logo_path = find_logo()
     if logo_path:
         st.sidebar.image(logo_path, use_container_width=True)
         st.sidebar.markdown("\n")
-        
+
     st.sidebar.markdown(cbconfig['side']['title'])
     st.sidebar.markdown(cbconfig['side']['intro'])
     st.sidebar.markdown("---")
-    
+
     st.sidebar.link_button("🌐 Βιβλιοθήκες ΔΙΠΑΕ", "https://www.ihu.gr/vivliothiki-kentro-pliroforisis", use_container_width=True)
-    
+
     if st.sidebar.button("⚖️ Αδειοδότηση", use_container_width=True):
         st.session_state.show_license = not st.session_state.show_license
-        
+
     if st.session_state.show_license:
-        _, indexed_pages = fetch_all_library_pages_v3()
+        _, crawled_urls = fetch_all_library_pages_v5()
         st.sidebar.info(
             "**Αδειοδότηση & Συμμόρφωση:**\n\n"
             "Προσαρμογή του ανοικτού λογισμικού *Kingbot (SJSU Library - MIT License)* "
@@ -254,13 +254,13 @@ if __name__ == "__main__":
             "**Προστασία Δεδομένων (GDPR):**\n"
             "Δεν συλλέγονται προσωπικά δεδομένα χρηστών (Καν. ΕΕ 2016/679 & Ν. 4624/2019). "
             "Καταγράφονται αποκλειστικά ανώνυμα στατιστικά θεματολογίας για τη βελτίωση των υπηρεσιών.\n\n"
-            f"**Πηγές ΔΙ.ΠΑ.Ε.:** Ευρετηριάστηκαν {indexed_pages} επίσημες σελίδες."
+            f"**Πηγές ΔΙ.ΠΑ.Ε. ({len(crawled_urls)} σελίδες):**\n" + "\n".join(f"- {u}" for u in crawled_urls[:10])
         )
-    
+
     # --- ΚΕΝΤΡΙΚΗ ΠΕΡΙΟΧΗ ---
     st.title("🏛️ Βιβλιοθήκες ΔΙΠΑΕ")
     st.markdown("\n")
-    
+
     col21, col22, col23 = st.columns(3)
     with col21:
         button1 = st.button("📍 Παράρτημα Σίνδου", use_container_width=True)
@@ -268,11 +268,11 @@ if __name__ == "__main__":
         button2 = st.button("📍 Παράρτημα Σερρών", use_container_width=True)
     with col23:
         button3 = st.button("📚 Δανεισμός & FAQ", use_container_width=True)
-        
+
     st.markdown("---")
-    
+
     user_query = st.chat_input(placeholder="Ρωτήστε για ωράρια, δανεισμό, συχνές ερωτήσεις, Σίνδο ή Σέρρες...")
-    
+
     new_query = None
     source_label = "Ελεύθερο κείμενο"
     if button1:
@@ -287,15 +287,12 @@ if __name__ == "__main__":
     elif user_query:
         new_query = user_query
         source_label = "Ελεύθερο κείμενο"
-        
+
     if new_query:
         with st.spinner("Αναζήτηση στα δεδομένα των βιβλιοθηκών..."):
             reply = generate_reply(new_query, source_label, client)
-        st.session_state.current_qa = {
-            "question": new_query,
-            "answer": reply
-        }
-        
+        st.session_state.current_qa = {"question": new_query, "answer": reply}
+
     if st.session_state.current_qa is None:
         st.chat_message("assistant", avatar=ASSISTANT_AVATAR).write(WELCOME_MESSAGE)
     else:
