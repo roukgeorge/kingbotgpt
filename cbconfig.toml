@@ -1,6 +1,6 @@
 [AVATARS]
-user = "https://libapps.sjsu.edu/kingbot/app/static/user_icon.png"
-assistant = "https://libapps.sjsu.edu/kingbot/app/static/kingbot_icon.png"
+user = "👤"
+assistant = "static/DI.PA.E._logo.png"
 
 [ROLES]
 user = "user"
@@ -8,25 +8,25 @@ assistant = "assistant"
 
 [main]
 title = "Ψηφιακός βοηθός Βιβλιοθηκών ΔΙΠΑΕ"
-logo = "![Kingbot](./app/static/kingbot_icon.png)"
+logo = "🏛️"
 
 [side]
-title = "## Βιβλιοθήκη ΔΙΠΑΕ"
-intro = "Ο ψηφιακός βοηθός της Βιβλιοθήκης του Διεθνούς Πανεπιστημίου της Ελλάδος (ΔΙΠΑΕ). Απαντά σε ερωτήσεις σχετικά με τις υπηρεσίες, τον δανεισμό και το ωράριο λειτουργίας."
-policylink = "https://www.ihu.gr"
-policylabel = "Ιστοσελίδα ΔΙΠΑΕ"
+title = "## Βιβλιοθήκες ΔΙΠΑΕ"
+intro = "Ο ψηφιακός βοηθός των Βιβλιοθηκών του Διεθνούς Πανεπιστημίου της Ελλάδος (ΔΙΠΑΕ). Απαντά σε ερωτήσεις σχετικά με τις υπηρεσίες, τον δανεισμό και το ωράριο λειτουργίας."
+policylink = "https://www.ihu.gr/vivliothiki-kentro-pliroforisis"
+policylabel = "Βιβλιοθήκες ΔΙΠΑΕ"
 
 [button1]
-label = "SJSU Library Hours"
-content = "What are SJSU library hours all weeks"
-chip = "SC: Hours"
+label = "📍 Παράρτημα Σίνδου"
+content = "Ποιο είναι το ωράριο, τα τηλέφωνα επικοινωνίας και οι υπηρεσίες της βιβλιοθήκης στη Σίνδο;"
+chip = "IHU: Sindos"
 
 [button2]
-label = "Start Your Research"
-content = "How do I start my research"
-chip = "SC: ResearchStart"
+label = "📍 Παράρτημα Σερρών"
+content = "Ποιο είναι το ωράριο, τα τηλέφωνα επικοινωνίας και οι υπηρεσίες της βιβλιοθήκης στις Σέρρες;"
+chip = "IHU: Serres"
 
 [button3]
-label = "Borrow A Laptop"
-content = "How do I borrow a laptop from SJSU library"
-chip = "SC: BorrowLaptop"
+label = "❓ Συχνές Ερωτήσεις & Δανεισμός"
+content = "Τι αναφέρουν οι συχνές ερωτήσεις και οι κανονισμοί σχετικά με τον δανεισμό στις βιβλιοθήκες του ΔΙΠΑΕ;"
+chip = "IHU: LoanFAQ"
