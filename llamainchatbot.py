@@ -2,6 +2,7 @@ import os
 import glob
 import json
 import time
+import unicodedata
 from datetime import datetime
 from urllib.parse import urljoin
 import requests
@@ -39,11 +40,9 @@ BASE_URLS = [
     "https://www.ihu.gr/vivliothiki-kentro-pliroforisis"
 ]
 
-MENU_KEYWORDS = [
-    "vivliothik", "βιβλιοθ", "serr", "σερρ", "sind", "σινδ", "therm", "θερμ",
-    "orari", "ωραρ", "daneism", "δανεισμ", "erotis", "ερωτησ", "faq",
-    "kanonism", "κανονισμ", "prosopik", "προσωπικ", "epikoinon", "επικοινων",
-    "ypires", "υπηρεσ", "diadaneism", "διαδανεισμ", "syllog", "συλλογ"
+EXCLUDED_URL_PARTS = [
+    "/en/", "/scholes", "/tmimata", "/dioikisi", "/prokiryxeis",
+    "/diagonismoi", "/wp-login", "/wp-admin", "/feed"
 ]
 
 WELCOME_MESSAGE = (
@@ -52,57 +51,71 @@ WELCOME_MESSAGE = (
     "σχετικά με τα ωράρια λειτουργίας (Σίνδος, Σέρρες, Θέρμη), τον δανεισμό βιβλίων και τις υπηρεσίες."
 )
 
+def normalize_greek(text):
+    return "".join(
+        ch for ch in unicodedata.normalize("NFD", text.lower())
+        if unicodedata.category(ch) != "Mn"
+    )
+
 @st.cache_resource(ttl="1d", show_spinner="Φόρτωση και ευρετηρίαση όλων των υπομενού των Βιβλιοθηκών ΔΙΠΑΕ...")
-def fetch_all_library_pages_v2():
-    headers = {"User-Agent": "Mozilla/5.0"}
+def fetch_all_library_pages_v3():
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "el-GR,el;q=0.9,en;q=0.8",
+    }
     visited = set()
     urls_to_crawl = list(BASE_URLS)
     
-    # Εντοπισμός όλων των συνδέσμων από τα αριστερά υπομενού (Σέρρες, Σίνδος, Κεντρική)
+    # Εντοπισμός όλων των συνδέσμων από τα αριστερά μενού και το περιεχόμενο των σελίδων της βιβλιοθήκης
     for base_url in BASE_URLS:
         try:
-            res = requests.get(base_url, headers=headers, timeout=6)
+            res = requests.get(base_url, headers=headers, timeout=8)
             if res.status_code == 200:
                 soup = BeautifulSoup(res.text, "html.parser")
-                # Αφαιρούμε μόνο το γενικό header και footer του πανεπιστημίου ώστε να μείνει το αριστερό μενού της βιβλιοθήκης
-                for tag in soup(["header", "footer"]):
+                for tag in soup(["header", "footer", "script", "style"]):
                     tag.extract()
-                for a_tag in soup.find_all("a", href=True):
-                    href = a_tag["href"].strip()
-                    if href.startswith(("mailto:", "tel:", "javascript:", "#")):
-                        continue
-                    full_url = urljoin(base_url, href).split("#")[0].rstrip("/")
-                    if "ihu.gr" not in full_url:
-                        continue
-                    if full_url.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".zip", ".mp4")):
-                        continue
-                    
-                    url_lower = full_url.lower()
-                    text_lower = a_tag.get_text(" ", strip=True).lower()
-                    if any(kw in url_lower or kw in text_lower for kw in MENU_KEYWORDS):
+                
+                # Συλλογή συνδέσμων από το αριστερό μενού (aside/menu/widget) και το κύριο περιεχόμενο
+                containers = soup.find_all(["aside", "main", "article"]) or [soup]
+                for container in containers:
+                    for a_tag in container.find_all("a", href=True):
+                        href = a_tag["href"].strip()
+                        if href.startswith(("mailto:", "tel:", "javascript:", "#")):
+                            continue
+                        full_url = urljoin(base_url, href).split("#")[0].rstrip("/")
+                        if "ihu.gr" not in full_url:
+                            continue
+                        if full_url.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".zip", ".mp4", ".pdf")):
+                            continue
+                        if any(ex in full_url.lower() for ex in EXCLUDED_URL_PARTS):
+                            continue
                         if full_url not in urls_to_crawl:
                             urls_to_crawl.append(full_url)
         except Exception:
             continue
 
     extracted_text = ""
+    crawled_count = 0
     for url in urls_to_crawl[:35]:
         if url in visited:
             continue
         visited.add(url)
         try:
-            res = requests.get(url, headers=headers, timeout=6)
+            res = requests.get(url, headers=headers, timeout=8)
             if res.status_code == 200:
                 soup = BeautifulSoup(res.text, "html.parser")
                 for tag in soup(["script", "style", "header", "footer"]):
                     tag.extract()
-                main_content = soup.find("main") or soup.find("article") or soup.body or soup
-                text = " ".join(main_content.stripped_strings)
-                extracted_text += f"\n\n=== ΠΗΓΗ: {url} ===\n{text}"
+                body = soup.body or soup
+                text = " ".join(body.stripped_strings)
+                if text:
+                    extracted_text += f"\n\n=== ΠΗΓΗ: {url} ===\n{text}"
+                    crawled_count += 1
         except Exception:
             continue
             
-    return extracted_text
+    return extracted_text, crawled_count
 
 @st.cache_resource(ttl="1d", show_spinner=False)
 def get_available_models(_client):
@@ -144,7 +157,7 @@ def log_anonymous_stat(source, category, question, answered):
         pass
 
 def get_system_prompt():
-    live_content = fetch_all_library_pages_v2()
+    live_content, _ = fetch_all_library_pages_v3()
     return f"""
 Είσαι ο επίσημος ψηφιακός βοηθός των Βιβλιοθηκών και Κέντρων Πληροφόρησης του Διεθνούς Πανεπιστημίου της Ελλάδος (ΔΙΠΑΕ).
 Απαντάς πάντα στα ελληνικά με ευγένεια, σαφήνεια και απόλυτη ακρίβεια.
@@ -232,6 +245,7 @@ if __name__ == "__main__":
         st.session_state.show_license = not st.session_state.show_license
         
     if st.session_state.show_license:
+        _, indexed_pages = fetch_all_library_pages_v3()
         st.sidebar.info(
             "**Αδειοδότηση & Συμμόρφωση:**\n\n"
             "Προσαρμογή του ανοικτού λογισμικού *Kingbot (SJSU Library - MIT License)* "
@@ -240,8 +254,7 @@ if __name__ == "__main__":
             "**Προστασία Δεδομένων (GDPR):**\n"
             "Δεν συλλέγονται προσωπικά δεδομένα χρηστών (Καν. ΕΕ 2016/679 & Ν. 4624/2019). "
             "Καταγράφονται αποκλειστικά ανώνυμα στατιστικά θεματολογίας για τη βελτίωση των υπηρεσιών.\n\n"
-            "**Σημείωση AI:**\n"
-            "Οι απαντήσεις παράγονται αυτόματα από επίσημες πηγές του ΔΙ.ΠΑ.Ε."
+            f"**Πηγές ΔΙ.ΠΑ.Ε.:** Ευρετηριάστηκαν {indexed_pages} επίσημες σελίδες."
         )
     
     # --- ΚΕΝΤΡΙΚΗ ΠΕΡΙΟΧΗ ---
@@ -283,7 +296,6 @@ if __name__ == "__main__":
             "answer": reply
         }
         
-    # Εμφάνιση ΜΙΑΣ ερώτησης-απάντησης τη φορά (ή του καλωσορίσματος στην αρχή)
     if st.session_state.current_qa is None:
         st.chat_message("assistant", avatar=ASSISTANT_AVATAR).write(WELCOME_MESSAGE)
     else:
