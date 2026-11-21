@@ -35,6 +35,12 @@ BASE_URLS = [
     "https://www.ihu.gr/vivliothiki-kentro-pliroforisis"
 ]
 
+WELCOME_MESSAGE = (
+    "Καλώς ήρθατε στον ψηφιακό βοηθό των **Βιβλιοθηκών του ΔΙΠΑΕ**! 👋\n\n"
+    "Μπορείτε να επιλέξετε ένα από τα παραπάνω θέματα ή να πληκτρολογήσετε την ερώτησή σας "
+    "σχετικά με τα ωράρια λειτουργίας (Σίνδος, Σέρρες, Θέρμη), τον δανεισμό βιβλίων και τις υπηρεσίες."
+)
+
 @st.cache_resource(ttl="1d", show_spinner="Φόρτωση και ευρετηρίαση όλων των υπομενού των Βιβλιοθηκών ΔΙΠΑΕ...")
 def fetch_all_library_pages():
     headers = {"User-Agent": "Mozilla/5.0"}
@@ -111,42 +117,37 @@ def get_system_prompt():
 {live_content}
 """
 
-def process_query(user_query, client):
+def generate_reply(user_query, client):
     models_to_try = get_available_models(client)
     full_instructions = get_system_prompt()
     
-    with st.spinner(text="Αναζήτηση στα δεδομένα των βιβλιοθηκών..."):
-        answer = None
-        last_error = ""
-        for model_name in models_to_try:
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=user_query,
-                    config=types.GenerateContentConfig(
-                        system_instruction=full_instructions,
-                        temperature=0.0,
-                    )
+    answer = None
+    last_error = ""
+    for model_name in models_to_try:
+        try:
+            response = client.models.generate_content(
+                model=model_name,
+                contents=user_query,
+                config=types.GenerateContentConfig(
+                    system_instruction=full_instructions,
+                    temperature=0.0,
                 )
-                if response and response.text:
-                    answer = response.text
-                    break
-            except Exception as e:
-                last_error = str(e)
-                if "503" in last_error or "UNAVAILABLE" in last_error:
-                    time.sleep(2)
-                continue
-        
-        if not answer:
-            answer = f"Προέκυψε προσωρινό σφάλμα επικοινωνίας με το AI ({last_error}). Παρακαλώ ξαναστείλτε την ερώτηση."
-            
-        st.session_state.current_qa = {
-            "question": user_query,
-            "answer": answer
-        }
+            )
+            if response and response.text:
+                answer = response.text
+                break
+        except Exception as e:
+            last_error = str(e)
+            if "503" in last_error or "UNAVAILABLE" in last_error:
+                time.sleep(2)
+            continue
+    
+    if not answer:
+        answer = f"Προέκυψε προσωρινό σφάλμα επικοινωνίας με το AI ({last_error}). Παρακαλώ ξαναστείλτε την ερώτηση."
+    return answer
 
 if __name__ == "__main__":
-    st.set_page_config(page_title="Βιβλιοθήκες ΔΙΠΑΕ - AI Chatbot", page_icon="🤖", initial_sidebar_state="expanded")
+    st.set_page_config(page_title="Βιβλιοθήκες ΔΙΠΑΕ - AI Chatbot", page_icon="🏛️", initial_sidebar_state="expanded")
     st.markdown(HIDEMENU, unsafe_allow_html=True)
     
     client = genai.Client(
@@ -154,7 +155,10 @@ if __name__ == "__main__":
         http_options=types.HttpOptions(timeout=15000)
     )
     
-    # Αριστερή πλαϊνή μπάρα με το λογότυπο του ΔΙΠΑΕ
+    if "messages" not in st.session_state:
+        st.session_state.messages = [{"role": "assistant", "content": WELCOME_MESSAGE}]
+    
+    # --- ΑΡΙΣΤΕΡΗ ΠΛΑΪΝΗ ΜΠΑΡΑ ---
     logo_path = find_logo()
     if logo_path:
         st.sidebar.image(logo_path, use_container_width=True)
@@ -162,28 +166,45 @@ if __name__ == "__main__":
         
     st.sidebar.markdown(cbconfig['side']['title'])
     st.sidebar.markdown(cbconfig['side']['intro'])
-    st.sidebar.markdown("\n\n")
-    st.sidebar.link_button("Βιβλιοθήκες ΔΙΠΑΕ", "https://www.ihu.gr/vivliothiki-kentro-pliroforisis")
+    st.sidebar.markdown("---")
     
-    # Κεντρικός τίτλος
-    col1, col2, col3 = st.columns([0.25, 0.1, 0.65], vertical_alignment="bottom")
-    with col2:
-        st.markdown(cbconfig['main']['logo'])
-    with col3:
-        st.title("Βιβλιοθήκες ΔΙΠΑΕ")
-    st.markdown("\n\n")
+    st.sidebar.link_button("🌐 Ιστοσελίδα Βιβλιοθηκών ΔΙΠΑΕ", "https://www.ihu.gr/vivliothiki-kentro-pliroforisis", use_container_width=True)
+    st.sidebar.link_button("📚 Ιδρυματικό Αποθετήριο ΕΥΡΗΚΑ", "https://eureka.lib.ihu.gr/", use_container_width=True)
     
-    # Κουμπιά γρήγορων ερωτήσεων
+    if st.sidebar.button("🗑️ Καθαρισμός συνομιλίας", use_container_width=True):
+        st.session_state.messages = [{"role": "assistant", "content": WELCOME_MESSAGE}]
+        st.rerun()
+        
+    st.sidebar.markdown("---")
+    with st.sidebar.expander("⚖️ Άδεια Χρήσης & Όροι"):
+        st.caption(
+            "**Αδειοδότηση Λογισμικού:**\n"
+            "Προσαρμογή του ανοικτού λογισμικού *Kingbot (SJSU Library - MIT License)* "
+            "για τις Βιβλιοθήκες του ΔΙ.ΠΑ.Ε., σύμφωνα με τον Ν. 2121/1993 και τον Ν. 4727/2020.\n\n"
+            "**Προστασία Δεδομένων (GDPR):**\n"
+            "Η εφαρμογή δεν συλλέγει ούτε αποθηκεύει προσωπικά δεδομένα χρηστών (Κανονισμός ΕΕ 2016/679).\n\n"
+            "**Σημείωση AI:**\n"
+            "Οι απαντήσεις παράγονται αυτόματα από επίσημες πηγές του ΔΙ.ΠΑ.Ε. Για δεσμευτικά ζητήματα ισχύει ο Εσωτερικός Κανονισμός."
+        )
+    
+    # --- ΚΕΝΤΡΙΚΗ ΠΕΡΙΟΧΗ ---
+    st.title("🏛️ Βιβλιοθήκες ΔΙΠΑΕ")
+    st.markdown("\n")
+    
     col21, col22, col23 = st.columns(3)
     with col21:
-        button1 = st.button("📍 Παράρτημα Σίνδου")
+        button1 = st.button("📍 Παράρτημα Σίνδου", use_container_width=True)
     with col22:
-        button2 = st.button("📍 Παράρτημα Σερρών")    
+        button2 = st.button("📍 Παράρτημα Σερρών", use_container_width=True)
     with col23:
-        button3 = st.button("❓ Συχνές Ερωτήσεις & Δανεισμός")    
+        button3 = st.button("📚 Δανεισμός & FAQ", use_container_width=True)
+        
+    st.markdown("---")
     
-    if 'current_qa' not in st.session_state:
-        st.session_state.current_qa = None
+    # Εμφάνιση ιστορικού συνομιλίας
+    for msg in st.session_state.messages:
+        avatar_icon = AVATARS["user"] if msg["role"] == "user" else AVATARS["assistant"]
+        st.chat_message(msg["role"], avatar=avatar_icon).write(msg["content"])
         
     user_query = st.chat_input(placeholder="Ρωτήστε για ωράρια, δανεισμό, συχνές ερωτήσεις, Σίνδο ή Σέρρες...")
     
@@ -198,8 +219,11 @@ if __name__ == "__main__":
         new_query = user_query
         
     if new_query:
-        process_query(new_query, client)
+        st.session_state.messages.append({"role": "user", "content": new_query})
+        st.chat_message("user", avatar=AVATARS["user"]).write(new_query)
         
-    if st.session_state.current_qa:
-        st.chat_message("user", avatar=AVATARS["user"]).write(st.session_state.current_qa["question"])
-        st.chat_message("assistant", avatar=AVATARS["assistant"]).write(st.session_state.current_qa["answer"])
+        with st.spinner("Αναζήτηση στα δεδομένα των βιβλιοθηκών..."):
+            reply = generate_reply(new_query, client)
+            
+        st.session_state.messages.append({"role": "assistant", "content": reply})
+        st.chat_message("assistant", avatar=AVATARS["assistant"]).write(reply)
