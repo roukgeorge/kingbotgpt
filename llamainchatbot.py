@@ -1,6 +1,8 @@
 import os
 import glob
+import json
 import time
+from datetime import datetime
 from urllib.parse import urljoin
 import requests
 from bs4 import BeautifulSoup
@@ -32,9 +34,16 @@ p img{
 """
 
 BASE_URLS = [
-    "https://www.ihu.gr/vivliothiki-kentro-pliroforisis/sindos",
     "https://www.ihu.gr/vivliothiki-kentro-pliroforisis/serres",
+    "https://www.ihu.gr/vivliothiki-kentro-pliroforisis/sindos",
     "https://www.ihu.gr/vivliothiki-kentro-pliroforisis"
+]
+
+MENU_KEYWORDS = [
+    "vivliothik", "βιβλιοθ", "serr", "σερρ", "sind", "σινδ", "therm", "θερμ",
+    "orari", "ωραρ", "daneism", "δανεισμ", "erotis", "ερωτησ", "faq",
+    "kanonism", "κανονισμ", "prosopik", "προσωπικ", "epikoinon", "επικοινων",
+    "ypires", "υπηρεσ", "diadaneism", "διαδανεισμ", "syllog", "συλλογ"
 ]
 
 WELCOME_MESSAGE = (
@@ -44,35 +53,50 @@ WELCOME_MESSAGE = (
 )
 
 @st.cache_resource(ttl="1d", show_spinner="Φόρτωση και ευρετηρίαση όλων των υπομενού των Βιβλιοθηκών ΔΙΠΑΕ...")
-def fetch_all_library_pages():
+def fetch_all_library_pages_v2():
     headers = {"User-Agent": "Mozilla/5.0"}
     visited = set()
     urls_to_crawl = list(BASE_URLS)
     
+    # Εντοπισμός όλων των συνδέσμων από τα αριστερά υπομενού (Σέρρες, Σίνδος, Κεντρική)
     for base_url in BASE_URLS:
         try:
-            res = requests.get(base_url, headers=headers, timeout=5)
+            res = requests.get(base_url, headers=headers, timeout=6)
             if res.status_code == 200:
                 soup = BeautifulSoup(res.text, "html.parser")
+                # Αφαιρούμε μόνο το γενικό header και footer του πανεπιστημίου ώστε να μείνει το αριστερό μενού της βιβλιοθήκης
+                for tag in soup(["header", "footer"]):
+                    tag.extract()
                 for a_tag in soup.find_all("a", href=True):
-                    full_url = urljoin(base_url, a_tag["href"]).split("#")[0].rstrip("/")
-                    if "ihu.gr/vivliothiki-kentro-pliroforisis" in full_url and full_url not in urls_to_crawl:
-                        urls_to_crawl.append(full_url)
+                    href = a_tag["href"].strip()
+                    if href.startswith(("mailto:", "tel:", "javascript:", "#")):
+                        continue
+                    full_url = urljoin(base_url, href).split("#")[0].rstrip("/")
+                    if "ihu.gr" not in full_url:
+                        continue
+                    if full_url.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".zip", ".mp4")):
+                        continue
+                    
+                    url_lower = full_url.lower()
+                    text_lower = a_tag.get_text(" ", strip=True).lower()
+                    if any(kw in url_lower or kw in text_lower for kw in MENU_KEYWORDS):
+                        if full_url not in urls_to_crawl:
+                            urls_to_crawl.append(full_url)
         except Exception:
             continue
 
     extracted_text = ""
-    for url in urls_to_crawl[:18]:
+    for url in urls_to_crawl[:35]:
         if url in visited:
             continue
         visited.add(url)
         try:
-            res = requests.get(url, headers=headers, timeout=5)
+            res = requests.get(url, headers=headers, timeout=6)
             if res.status_code == 200:
                 soup = BeautifulSoup(res.text, "html.parser")
-                for tag in soup(["script", "style", "footer", "header"]):
+                for tag in soup(["script", "style", "header", "footer"]):
                     tag.extract()
-                main_content = soup.find("main") or soup.find("article") or soup
+                main_content = soup.find("main") or soup.find("article") or soup.body or soup
                 text = " ".join(main_content.stripped_strings)
                 extracted_text += f"\n\n=== ΠΗΓΗ: {url} ===\n{text}"
         except Exception:
@@ -103,23 +127,46 @@ def find_logo():
                     return f
     return None
 
+def log_anonymous_stat(source, category, question, answered):
+    webhook_url = st.secrets.get("STATS_WEBHOOK_URL", "").strip()
+    if not webhook_url:
+        return
+    try:
+        payload = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "source": source,
+            "category": category,
+            "question": question,
+            "answered": "Ναι" if answered else "Όχι"
+        }
+        requests.post(webhook_url, json=payload, timeout=10)
+    except Exception:
+        pass
+
 def get_system_prompt():
-    live_content = fetch_all_library_pages()
+    live_content = fetch_all_library_pages_v2()
     return f"""
 Είσαι ο επίσημος ψηφιακός βοηθός των Βιβλιοθηκών και Κέντρων Πληροφόρησης του Διεθνούς Πανεπιστημίου της Ελλάδος (ΔΙΠΑΕ).
 Απαντάς πάντα στα ελληνικά με ευγένεια, σαφήνεια και απόλυτη ακρίβεια.
 
 ΑΥΣΤΗΡΟΙ ΚΑΝΟΝΕΣ:
 1. Οι Βιβλιοθήκες του ΔΙΠΑΕ λειτουργούν αποκλειστικά σε Σίνδο, Σέρρες και Θέρμη. Δεν λειτουργούν σε άλλες πόλεις.
-2. Βασίσου ΑΠΟΚΛΕΙΣΤΙΚΑ στα παρακάτω επίσημα κείμενα που αντλήθηκαν από τις ιστοσελίδες και τα υπομενού (Συχνές Ερωτήσεις, Κανονισμοί, Υπηρεσίες) των Βιβλιοθηκών του ΔΙΠΑΕ. Μην επινοείς κανόνες ή αριθμούς.
+2. Βασίσου ΑΠΟΚΛΕΙΣΤΙΚΑ στα παρακάτω επίσημα κείμενα που αντλήθηκαν από τις ιστοσελίδες και τα υπομενού (Ωράρια, Συχνές Ερωτήσεις, Κανονισμοί, Υπηρεσίες) των Βιβλιοθηκών του ΔΙΠΑΕ. Μην επινοείς κανόνες ή αριθμούς.
 3. Όταν απαντάς, ανέφερε στο τέλος τη σχετική επίσημη σελίδα (URL) από τις πηγές παρακάτω ώστε ο χρήστης να μπορεί να τη δει αναλυτικά.
 4. Αν μια πληροφορία δεν υπάρχει καθόλου στα παρακάτω κείμενα, δήλωσε ξεκάθαρα ότι δεν αναφέρεται αναλυτικά στις σελίδες των βιβλιοθηκών και πρότεινε στον χρήστη να επισκεφθεί την επίσημη ιστοσελίδα (https://www.ihu.gr/vivliothiki-kentro-pliroforisis) ή να επικοινωνήσει απευθείας με το προσωπικό της βιβλιοθήκης (αναφέροντας και τα σχετικά στοιχεία επικοινωνίας, όπως τηλέφωνα ή email, αν υπάρχουν στα παρακάτω κείμενα).
+
+ΜΟΡΦΗ ΕΞΟΔΟΥ (ΑΥΣΤΗΡΑ JSON):
+Επίστρεψε ΑΠΟΚΛΕΙΣΤΙΚΑ ένα έγκυρο αντικείμενο JSON με τα εξής 4 πεδία:
+- "answer": Η αναλυτική απάντησή σου στα ελληνικά (με Markdown μορφοποίηση).
+- "category": Μία από τις εξής κατηγορίες: "Ωράριο Λειτουργίας", "Δανεισμός & Κανόνες", "Παράρτημα Σίνδου", "Παράρτημα Σερρών", "Παράρτημα Θέρμης", "Ηλεκτρονικές Πηγές & Βάσεις", "Επικοινωνία & Προσωπικό", "Άλλο".
+- "sanitized_question": Η ερώτηση του χρήστη όπως ακριβώς γράφτηκε, ΑΛΛΑ αν περιέχει ονοματεπώνυμο, Αριθμό Μητρώου, email ή τηλέφωνο, αντικατάστησέ τα με "[ΑΝΩΝΥΜΟ]" για συμμόρφωση με τον GDPR.
+- "answered": true αν η απάντηση βρέθηκε στα κείμενα της βιβλιοθήκης, ή false αν η πληροφορία δεν υπήρχε και παρέπεμψες στο προσωπικό.
 
 ΕΠΙΣΗΜΟ ΠΕΡΙΕΧΟΜΕΝΟ ΙΣΤΟΣΕΛΙΔΩΝ & ΥΠΟΜΕΝΟΥ ΔΙΠΑΕ:
 {live_content}
 """
 
-def generate_reply(user_query, client):
+def generate_reply(user_query, source_label, client):
     models_to_try = get_available_models(client)
     full_instructions = get_system_prompt()
     
@@ -133,10 +180,17 @@ def generate_reply(user_query, client):
                 config=types.GenerateContentConfig(
                     system_instruction=full_instructions,
                     temperature=0.0,
+                    response_mime_type="application/json",
                 )
             )
             if response and response.text:
-                answer = response.text
+                data = json.loads(response.text)
+                answer = data.get("answer", "")
+                category = data.get("category", "Άλλο")
+                sanitized_q = data.get("sanitized_question", user_query)
+                answered = bool(data.get("answered", True))
+                
+                log_anonymous_stat(source_label, category, sanitized_q, answered)
                 break
         except Exception as e:
             last_error = str(e)
@@ -157,8 +211,8 @@ if __name__ == "__main__":
         http_options=types.HttpOptions(timeout=15000)
     )
     
-    if "messages" not in st.session_state:
-        st.session_state.messages = [{"role": "assistant", "content": WELCOME_MESSAGE}]
+    if "current_qa" not in st.session_state:
+        st.session_state.current_qa = None
     if "show_license" not in st.session_state:
         st.session_state.show_license = False
     
@@ -184,7 +238,8 @@ if __name__ == "__main__":
             "για τις Βιβλιοθήκες του ΔΙ.ΠΑ.Ε., σύμφωνα με την ελληνική νομοθεσία "
             "(Ν. 2121/1993 & Ν. 4727/2020) και τον Κανονισμό Λειτουργίας του Ιδρύματος.\n\n"
             "**Προστασία Δεδομένων (GDPR):**\n"
-            "Δεν συλλέγονται ούτε αποθηκεύονται προσωπικά δεδομένα χρηστών (Καν. ΕΕ 2016/679).\n\n"
+            "Δεν συλλέγονται προσωπικά δεδομένα χρηστών (Καν. ΕΕ 2016/679 & Ν. 4624/2019). "
+            "Καταγράφονται αποκλειστικά ανώνυμα στατιστικά θεματολογίας για τη βελτίωση των υπηρεσιών.\n\n"
             "**Σημείωση AI:**\n"
             "Οι απαντήσεις παράγονται αυτόματα από επίσημες πηγές του ΔΙ.ΠΑ.Ε."
         )
@@ -203,28 +258,34 @@ if __name__ == "__main__":
         
     st.markdown("---")
     
-    for msg in st.session_state.messages:
-        avatar_icon = USER_AVATAR if msg["role"] == "user" else ASSISTANT_AVATAR
-        st.chat_message(msg["role"], avatar=avatar_icon).write(msg["content"])
-        
     user_query = st.chat_input(placeholder="Ρωτήστε για ωράρια, δανεισμό, συχνές ερωτήσεις, Σίνδο ή Σέρρες...")
     
     new_query = None
+    source_label = "Ελεύθερο κείμενο"
     if button1:
         new_query = "Ποιο είναι το ωράριο, τα τηλέφωνα επικοινωνίας και οι υπηρεσίες της βιβλιοθήκης στη Σίνδο;"
+        source_label = "Κουμπί: Παράρτημα Σίνδου"
     elif button2:
         new_query = "Ποιο είναι το ωράριο, τα τηλέφωνα επικοινωνίας και οι υπηρεσίες της βιβλιοθήκης στις Σέρρες;"
+        source_label = "Κουμπί: Παράρτημα Σερρών"
     elif button3:
         new_query = "Τι αναφέρουν οι συχνές ερωτήσεις και οι κανονισμοί σχετικά με τον δανεισμό στις βιβλιοθήκες του ΔΙΠΑΕ;"
+        source_label = "Κουμπί: Δανεισμός & FAQ"
     elif user_query:
         new_query = user_query
+        source_label = "Ελεύθερο κείμενο"
         
     if new_query:
-        st.session_state.messages.append({"role": "user", "content": new_query})
-        st.chat_message("user", avatar=USER_AVATAR).write(new_query)
-        
         with st.spinner("Αναζήτηση στα δεδομένα των βιβλιοθηκών..."):
-            reply = generate_reply(new_query, client)
-            
-        st.session_state.messages.append({"role": "assistant", "content": reply})
-        st.chat_message("assistant", avatar=ASSISTANT_AVATAR).write(reply)
+            reply = generate_reply(new_query, source_label, client)
+        st.session_state.current_qa = {
+            "question": new_query,
+            "answer": reply
+        }
+        
+    # Εμφάνιση ΜΙΑΣ ερώτησης-απάντησης τη φορά (ή του καλωσορίσματος στην αρχή)
+    if st.session_state.current_qa is None:
+        st.chat_message("assistant", avatar=ASSISTANT_AVATAR).write(WELCOME_MESSAGE)
+    else:
+        st.chat_message("user", avatar=USER_AVATAR).write(st.session_state.current_qa["question"])
+        st.chat_message("assistant", avatar=ASSISTANT_AVATAR).write(st.session_state.current_qa["answer"])
