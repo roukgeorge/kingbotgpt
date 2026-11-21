@@ -35,7 +35,7 @@ WELCOME_MESSAGE = (
 STOPWORDS = {
     "και", "για", "απο", "στη", "στην", "στο", "στον", "στης", "στους", "στις",
     "των", "του", "της", "τον", "την", "ενα", "μια", "ενας", "ειναι", "εχει",
-    "εχουν", "πως", "ποιο", "ποια", "ποιος", "ποιες", "ποια", "τι", "ωρα",
+    "εχουν", "πως", "ποιο", "ποια", "ποιος", "ποιες", "τι", "ωρα",
     "μπορω", "θελω", "σχετικα", "με", "σε", "ως", "οτι", "αν", "θα", "να", "τα", "οι", "το"
 }
 
@@ -72,7 +72,6 @@ def load_and_chunk_knowledge():
         if line.startswith("=== ΠΗΓΗ:"):
             current_source = line.replace("=== ΠΗΓΗ:", "").replace("===", "").strip()
             continue
-        # Αν μια γραμμή είναι πολύ μεγάλη, τη σπάμε σε μικρότερα κομμάτια
         for i in range(0, len(line), chunk_size):
             piece = line[i:i + chunk_size]
             chunks.append((f"[{current_source}]\n{piece}", extract_stems(piece)))
@@ -97,14 +96,14 @@ def get_relevant_context(query, max_chunks=10):
     top_chunks = sorted(scored[:max_chunks], key=lambda x: x[1])
     return "\n\n---\n\n".join(c[2] for c in top_chunks)
 
-@st.cache_resource(ttl="1d", show_spinner=False)
+@st.cache_resource(ttl=86400, show_spinner=False)
 def get_available_models(_client):
-    preferred = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash"]
+    preferred = ["gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
     try:
         available = []
         for m in _client.models.list():
             name = m.name.replace("models/", "")
-            if "flash" in name and "image" not in name and "audio" not in name and "tts" not in name:
+            if "flash" in name and "3.8" not in name and "image" not in name and "audio" not in name and "tts" not in name:
                 available.append(name)
         ordered = [m for m in preferred if m in available]
         for m in available:
@@ -168,13 +167,13 @@ def build_system_prompt(relevant_content):
 {relevant_content}
 """
 
-@st.cache_data(ttl="1d", show_spinner=False)
+@st.cache_data(ttl=604800, show_spinner=False)
 def cached_ai_query(normalized_key, user_query, _client):
     models_to_try = get_available_models(_client)
     relevant_content = get_relevant_context(user_query)
     full_instructions = build_system_prompt(relevant_content)
 
-    for model_name in models_to_try[:3]:
+    for model_name in models_to_try[:4]:
         for attempt in range(2):
             try:
                 response = _client.models.generate_content(
@@ -197,7 +196,11 @@ def cached_ai_query(normalized_key, user_query, _client):
                     )
             except Exception as e:
                 err_str = str(e)
-                if "503" in err_str or "UNAVAILABLE" in err_str or "429" in err_str:
+                # Αν εξαντλήθηκε το όριο (429), πάμε αμέσως στο επόμενο μοντέλο χωρίς αναμονή
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    break
+                # Αν έχει στιγμιαία κίνηση (503), δοκιμάζουμε 1 φορά μετά από 1 δευτερόλεπτο
+                if "503" in err_str or "UNAVAILABLE" in err_str:
                     time.sleep(1.0)
                     continue
                 break
