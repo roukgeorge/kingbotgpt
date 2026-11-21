@@ -2,22 +2,18 @@ import os
 import glob
 import json
 import time
-import unicodedata
 from datetime import datetime
-from urllib.parse import urljoin
-import urllib3
 import requests
-from bs4 import BeautifulSoup
 import streamlit as st
 from google import genai
 from google.genai import types
 import toml
 
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 cbconfig = toml.load("cbconfig.toml")
 
 USER_AVATAR = "👤"
 ASSISTANT_AVATAR = "🤖"
+DATA_FILE = "ihu_library_data.txt"
 
 HIDEMENU = """
 <style>
@@ -28,94 +24,17 @@ p img {margin-bottom: 0.6rem;}
 </style>
 """
 
-BASE_URLS = [
-    "https://www.ihu.gr/vivliothiki-kentro-pliroforisis/serres",
-    "https://www.ihu.gr/vivliothiki-kentro-pliroforisis/sindos",
-    "https://www.ihu.gr/vivliothiki-kentro-pliroforisis"
-]
-
-MENU_KEYWORDS = [
-    "vivliothik", "βιβλιοθ", "serr", "σερρ", "sind", "σινδ", "therm", "θερμ",
-    "orari", "ωραρ", "daneism", "δανεισμ", "erotis", "ερωτησ", "faq",
-    "kanonism", "κανονισμ", "prosopik", "προσωπικ", "epikoinon", "επικοινων",
-    "ypires", "υπηρεσ", "diadaneism", "διαδανεισμ", "syllog", "συλλογ"
-]
-
-EXCLUDED_PARTS = [
-    "/en/", "/scholes", "/tmimata", "/dioikisi", "/prokiryxeis",
-    "/diagonismoi", "/wp-login", "/wp-admin", "/feed"
-]
-
 WELCOME_MESSAGE = (
     "Καλώς ήρθατε στον ψηφιακό βοηθό των **Βιβλιοθηκών του ΔΙΠΑΕ**! 👋\n\n"
     "Μπορείτε να επιλέξετε ένα από τα παραπάνω θέματα ή να πληκτρολογήσετε την ερώτησή σας "
     "σχετικά με τα ωράρια λειτουργίας (Σίνδος, Σέρρες, Θέρμη), τον δανεισμό βιβλίων και τις υπηρεσίες."
 )
 
-def normalize_greek(text):
-    return "".join(
-        ch for ch in unicodedata.normalize("NFD", text.lower())
-        if unicodedata.category(ch) != "Mn"
-    )
-
-@st.cache_resource(ttl="1d", show_spinner="Φόρτωση και ευρετηρίαση όλων των υπομενού των Βιβλιοθηκών ΔΙΠΑΕ...")
-def fetch_all_library_pages_v5():
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-        "Accept-Language": "el-GR,el;q=0.9,en;q=0.8",
-    }
-    visited = set()
-    urls_to_crawl = list(BASE_URLS)
-
-    # 1. Συλλογή όλων των συνδέσμων από τα αριστερά υπομενού
-    for base_url in BASE_URLS:
-        try:
-            res = requests.get(base_url, headers=headers, timeout=10, verify=False)
-            if res.status_code == 200:
-                soup = BeautifulSoup(res.text, "html.parser")
-                for tag in soup(["header", "footer", "script", "style"]):
-                    tag.extract()
-                for a_tag in soup.find_all("a", href=True):
-                    href = a_tag["href"].strip()
-                    if href.startswith(("mailto:", "tel:", "javascript:", "#")):
-                        continue
-                    full_url = urljoin(base_url, href).split("#")[0].rstrip("/")
-                    if "ihu.gr" not in full_url:
-                        continue
-                    if full_url.lower().endswith((".jpg", ".jpeg", ".png", ".gif", ".webp", ".zip", ".mp4", ".pdf")):
-                        continue
-                    if any(ex in full_url.lower() for ex in EXCLUDED_PARTS):
-                        continue
-                    norm_url = normalize_greek(full_url)
-                    norm_text = normalize_greek(a_tag.get_text(" ", strip=True))
-                    if "vivliothiki-kentro-pliroforisis" in norm_url or any(kw in norm_url or kw in norm_text for kw in MENU_KEYWORDS):
-                        if full_url not in urls_to_crawl:
-                            urls_to_crawl.append(full_url)
-        except Exception:
-            continue
-
-    # 2. Ανάκτηση καθαρού κειμένου από έως 45 υποσελίδες
-    extracted_text = ""
-    crawled_urls = []
-    for url in urls_to_crawl[:45]:
-        if url in visited:
-            continue
-        visited.add(url)
-        try:
-            res = requests.get(url, headers=headers, timeout=10, verify=False)
-            if res.status_code == 200:
-                soup = BeautifulSoup(res.text, "html.parser")
-                for tag in soup(["script", "style", "header", "footer", "nav"]):
-                    tag.extract()
-                content_area = soup.find("main") or soup.find("article") or soup.body or soup
-                text = " ".join(content_area.stripped_strings)
-                if text:
-                    extracted_text += f"\n\n=== ΠΗΓΗ: {url} ===\n{text}"
-                    crawled_urls.append(url)
-        except Exception:
-            continue
-
-    return extracted_text, crawled_urls
+def load_library_knowledge():
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    return ""
 
 @st.cache_resource(ttl="1d", show_spinner=False)
 def get_available_models(_client):
@@ -157,26 +76,26 @@ def log_anonymous_stat(source, category, question, answered):
         pass
 
 def get_system_prompt():
-    live_content, _ = fetch_all_library_pages_v5()
+    library_content = load_library_knowledge()
     return f"""
 Είσαι ο επίσημος ψηφιακός βοηθός των Βιβλιοθηκών και Κέντρων Πληροφόρησης του Διεθνούς Πανεπιστημίου της Ελλάδος (ΔΙΠΑΕ).
 Απαντάς πάντα στα ελληνικά με ευγένεια, σαφήνεια και απόλυτη ακρίβεια.
 
 ΑΥΣΤΗΡΟΙ ΚΑΝΟΝΕΣ:
 1. Οι Βιβλιοθήκες του ΔΙΠΑΕ λειτουργούν αποκλειστικά σε Σίνδο, Σέρρες και Θέρμη. Δεν λειτουργούν σε άλλες πόλεις.
-2. Βασίσου ΑΠΟΚΛΕΙΣΤΙΚΑ στα παρακάτω επίσημα κείμενα που αντλήθηκαν από τις ιστοσελίδες και τα υπομενού (Ωράρια, Συχνές Ερωτήσεις, Κανονισμοί, Υπηρεσίες) των Βιβλιοθηκών του ΔΙΠΑΕ. Μην επινοείς κανόνες ή αριθμούς.
-3. Όταν απαντάς, ανέφερε στο τέλος τη σχετική επίσημη σελίδα (URL) από τις πηγές παρακάτω ώστε ο χρήστης να μπορεί να τη δει αναλυτικά.
-4. Αν μια πληροφορία δεν υπάρχει καθόλου στα παρακάτω κείμενα, δήλωσε ξεκάθαρα ότι δεν αναφέρεται αναλυτικά στις σελίδες των βιβλιοθηκών και πρότεινε στον χρήστη να επισκεφθεί την επίσημη ιστοσελίδα (https://www.ihu.gr/vivliothiki-kentro-pliroforisis) ή να επικοινωνήσει απευθείας με το προσωπικό της βιβλιοθήκης (αναφέροντας και τα σχετικά στοιχεία επικοινωνίας, όπως τηλέφωνα ή email, αν υπάρχουν στα παρακάτω κείμενα).
+2. Βασίσου ΑΠΟΚΛΕΙΣΤΙΚΑ στα παρακάτω επίσημα κείμενα των Βιβλιοθηκών του ΔΙΠΑΕ (Ωράρια, Συχνές Ερωτήσεις, Κανονισμοί, Υπηρεσίες). Μην επινοείς κανόνες, ώρες ή αριθμούς.
+3. Όταν απαντάς, ανέφερε στο τέλος τη σχετική επίσημη σελίδα (URL) εφόσον αναφέρεται στα κείμενα, αλλιώς το https://www.ihu.gr/vivliothiki-kentro-pliroforisis.
+4. Αν μια πληροφορία δεν υπάρχει καθόλου στα παρακάτω κείμενα, δήλωσε ξεκάθαρα ότι δεν αναφέρεται αναλυτικά στις διαθέσιμες πληροφορίες και πρότεινε στον χρήστη να επισκεφθεί την επίσημη ιστοσελίδα (https://www.ihu.gr/vivliothiki-kentro-pliroforisis) ή να επικοινωνήσει απευθείας με το προσωπικό της βιβλιοθήκης (αναφέροντας και τα σχετικά τηλέφωνα ή email, αν υπάρχουν στα παρακάτω κείμενα).
 
 ΜΟΡΦΗ ΕΞΟΔΟΥ (ΑΥΣΤΗΡΑ JSON):
 Επίστρεψε ΑΠΟΚΛΕΙΣΤΙΚΑ ένα έγκυρο αντικείμενο JSON με τα εξής 4 πεδία:
 - "answer": Η αναλυτική απάντησή σου στα ελληνικά (με Markdown μορφοποίηση).
 - "category": Μία από τις εξής κατηγορίες: "Ωράριο Λειτουργίας", "Δανεισμός & Κανόνες", "Παράρτημα Σίνδου", "Παράρτημα Σερρών", "Παράρτημα Θέρμης", "Ηλεκτρονικές Πηγές & Βάσεις", "Επικοινωνία & Προσωπικό", "Άλλο".
 - "sanitized_question": Η ερώτηση του χρήστη όπως ακριβώς γράφτηκε, ΑΛΛΑ αν περιέχει ονοματεπώνυμο, Αριθμό Μητρώου, email ή τηλέφωνο, αντικατάστησέ τα με "[ΑΝΩΝΥΜΟ]" για συμμόρφωση με τον GDPR.
-- "answered": true αν η απάντηση βρέθηκε στα κείμενα της βιβλιοθήκης, ή false αν η πληροφορία δεν υπήρχε και παρέπεμψες στο προσωπικό.
+- "answered": true αν η απάντηση βρέθηκε στα παρακάτω κείμενα, ή false αν η πληροφορία δεν υπήρχε και παρέπεμψες στο προσωπικό.
 
-ΕΠΙΣΗΜΟ ΠΕΡΙΕΧΟΜΕΝΟ ΙΣΤΟΣΕΛΙΔΩΝ & ΥΠΟΜΕΝΟΥ ΔΙΠΑΕ:
-{live_content}
+ΕΠΙΣΗΜΟ ΠΕΡΙΕΧΟΜΕΝΟ ΒΙΒΛΙΟΘΗΚΩΝ ΔΙΠΑΕ:
+{library_content}
 """
 
 def generate_reply(user_query, source_label, client):
@@ -245,7 +164,7 @@ if __name__ == "__main__":
         st.session_state.show_license = not st.session_state.show_license
 
     if st.session_state.show_license:
-        _, crawled_urls = fetch_all_library_pages_v5()
+        kb_size = len(load_library_knowledge())
         st.sidebar.info(
             "**Αδειοδότηση & Συμμόρφωση:**\n\n"
             "Προσαρμογή του ανοικτού λογισμικού *Kingbot (SJSU Library - MIT License)* "
@@ -254,7 +173,7 @@ if __name__ == "__main__":
             "**Προστασία Δεδομένων (GDPR):**\n"
             "Δεν συλλέγονται προσωπικά δεδομένα χρηστών (Καν. ΕΕ 2016/679 & Ν. 4624/2019). "
             "Καταγράφονται αποκλειστικά ανώνυμα στατιστικά θεματολογίας για τη βελτίωση των υπηρεσιών.\n\n"
-            f"**Πηγές ΔΙ.ΠΑ.Ε. ({len(crawled_urls)} σελίδες):**\n" + "\n".join(f"- {u}" for u in crawled_urls[:10])
+            f"**Βάση Γνώσης ΔΙ.ΠΑ.Ε.:** {kb_size:,} χαρακτήρες επίσημων κειμένων."
         )
 
     # --- ΚΕΝΤΡΙΚΗ ΠΕΡΙΟΧΗ ---
